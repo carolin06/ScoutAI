@@ -23,64 +23,49 @@ def _call_llm(prompt: str) -> str:
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
+        max_tokens=2048,
     )
     return response.choices[0].message.content
 
 def _generate_question(skill: str, difficulty: int) -> dict:
-    prompt = f"""You are a coding question generator. Generate a {skill} coding question.
+    prompt = f"""Generate a {skill} coding question at difficulty {difficulty}/5.
 
-Difficulty: {difficulty}/5
-- Level 1: print, arithmetic, simple string operations
-- Level 2: loops, conditionals, basic list operations  
-- Level 3: dictionaries, string algorithms, simple sorting
-- Level 4: two pointers, sliding window, hash maps
-- Level 5: dynamic programming, graphs, complex algorithms
-
-STRICT RULES:
-1. The _solution MUST pass ALL test cases
-2. Use only standard {skill} library, no imports needed
-3. test args must match exactly the function parameters
-4. expected values must be exactly what the solution returns
-5. Return ONLY raw JSON, no markdown, no backticks, no explanation
-
-JSON format:
+Return ONLY this JSON, nothing else, no explanation:
 {{
-    "id": "gen_{skill.lower()}_l{difficulty}",
-    "skill": "{skill}",
-    "difficulty": {difficulty},
-    "type": "coding",
-    "prompt": "Write a function description here",
-    "function_name": "function_name",
-    "starter_code": "def function_name(param):\\n    pass",
-    "tests": [
-        {{"args": [input1], "expected": output1}},
-        {{"args": [input2], "expected": output2}},
-        {{"args": [input3], "expected": output3}}
-    ],
-    "_solution": "def function_name(param):\\n    return result"
+"id":"gen_{skill.lower()}_l{difficulty}",
+"skill":"{skill}",
+"difficulty":{difficulty},
+"type":"coding",
+"prompt":"function description",
+"function_name":"fn_name",
+"starter_code":"def fn_name(x):\\n    pass",
+"tests":[{{"args":[1],"expected":1}},{{"args":[2],"expected":4}},{{"args":[3],"expected":9}}],
+"_solution":"def fn_name(x):\\n    return x*x"
 }}
 
-Example for difficulty 2:
-{{
-    "id": "gen_python_l2",
-    "skill": "Python",
-    "difficulty": 2,
-    "type": "coding",
-    "prompt": "Write a function square(n) that returns the square of a number.",
-    "function_name": "square",
-    "starter_code": "def square(n):\\n    pass",
-    "tests": [
-        {{"args": [3], "expected": 9}},
-        {{"args": [4], "expected": 16}},
-        {{"args": [0], "expected": 0}}
-    ],
-    "_solution": "def square(n):\\n    return n * n"
-}}
+Rules:
+- difficulty 1: arithmetic, string length
+- difficulty 2: loops, basic list ops
+- difficulty 3: sorting, two sum, palindrome
+- difficulty 4: hash maps, sliding window
+- difficulty 5: dynamic programming
+- solution must be ONE line only, no multiline
+- keep entire JSON under 400 characters total
+- use shortest possible solution
+- tests must have exactly 3 cases
+- CRITICAL: if function takes a list, args must be [[1,2,3]] not [1,2,3]
+- args is always a list of arguments, each argument wrapped separately
+- example: fn([1,2,3]) -> args must be [[1,2,3]]
+- example: fn(5) -> args must be [5]
+- example: fn("hello") -> args must be ["hello"]
+- NO imports needed
 
-Now generate a NEW different question for {skill} at difficulty {difficulty}:"""
+Generate for {skill} difficulty {difficulty}:"""
 
     raw = _call_llm(prompt).strip()
+    print(f"  response length: {len(raw)}")
     raw = re.sub(r"^```(json)?|```$", "", raw, flags=re.MULTILINE).strip()
+    print(f"  LLM raw response:\n{raw[:300]}")
     return json.loads(raw)
 
 def _verify_question(question: dict) -> bool:
