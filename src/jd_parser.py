@@ -37,16 +37,69 @@ def _vocab_extract(text: str) -> list:
             found.append(skill)
     return found
 
-def _infer_weights(text: str, skills: list) -> dict:
+def _infer_weights(text: str, skills: list, llm_fn=None) -> dict:
+    """
+    Uses LLM to classify each skill as must_have, strongly_preferred,
+    nice_to_have, or bonus based on context in the JD.
+    Falls back to position/count heuristic if no LLM.
+    """
+    if llm_fn is not None:
+        try:
+            prompt = f"""You are analyzing a job description.
+For each skill in this list, classify it based on how it appears in the JD.
+
+Skills to classify: {skills}
+
+Job Description:
+{text}
+
+Return ONLY a valid JSON object mapping each skill to a weight:
+- "must_have" or "required" or "essential" → 1.0
+- "strongly preferred" or "strong experience" → 0.8
+- "familiar" or "knowledge of" or "exposure" → 0.6
+- "nice to have" or "plus" or "bonus" → 0.4
+- not mentioned clearly → 0.5
+
+Return exactly this format, no explanation:
+{{"Python": 1.0, "Django": 0.8, "Docker": 0.4}}
+"""
+            raw = llm_fn(prompt).strip()
+            raw = re.sub(r"^```(json)?|```$", "", raw,
+                        flags=re.MULTILINE).strip()
+            weights = json.loads(raw)
+            # make sure every skill has a weight
+            for s in skills:
+                if s not in weights:
+                    weights[s] = 0.5
+            return weights
+        except Exception:
+            pass
+
+    # fallback — keyword based
     low = text.lower()
     weights = {}
+    MUST_HAVE = ["must", "required", "essential", "need", "mandatory"]
+    STRONG = ["strong", "experience", "proficient", "expertise", "solid"]
+    FAMILIAR = ["familiar", "knowledge", "exposure", "understanding"]
+    BONUS = ["plus", "bonus", "preferred", "nice to have", "beneficial"]
+
     for s in skills:
-        count = low.count(s.lower())
-        pos = low.find(s.lower())
-        base = 0.6 + min(count * 0.15, 0.4)
-        if pos != -1 and pos < len(low) * 0.3:
-            base += 0.1
-        weights[s] = round(min(base, 1.0), 2)
+        sl = s.lower()
+        # find the sentence containing this skill
+        sentences = text.lower().split(".")
+        context = " ".join([
+            sent for sent in sentences if sl in sent
+        ])
+        if any(w in context for w in MUST_HAVE):
+            weights[s] = 1.0
+        elif any(w in context for w in STRONG):
+            weights[s] = 0.8
+        elif any(w in context for w in FAMILIAR):
+            weights[s] = 0.6
+        elif any(w in context for w in BONUS):
+            weights[s] = 0.4
+        else:
+            weights[s] = 0.5
     return weights
 
 def parse_jd(text: str, llm_fn=None) -> JDSkills:
@@ -63,7 +116,10 @@ def parse_jd(text: str, llm_fn=None) -> JDSkills:
         if s.lower() not in seen:
             seen.add(s.lower())
             ordered.append(s)
-    return JDSkills(required=ordered, weights=_infer_weights(text, ordered))
+    return JDSkills(
+        required=ordered,
+        weights=_infer_weights(text, ordered, llm_fn)  # pass llm_fn
+    )
 
 
 if __name__ == "__main__":
