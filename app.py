@@ -15,7 +15,7 @@ from src.glassbox import build_report
 from src.assessment import (AdaptiveAssessment,
                              run_multi_skill_assessment,
                              pick_skills_to_verify)
-from src.resume_parser import parse_resume
+from src.resume_parser import parse_resume, extract_github_username
 from groq import Groq
 
 # ── page config ────────────────────────────────────────────
@@ -39,10 +39,12 @@ def llm_fn(prompt: str) -> str:
 # ── session state defaults ─────────────────────────────────
 def init_state():
     defaults = {
-        "stage": "input",           # input | evidence | match | assess | report
+        "stage": "input",
         "jd": None,
         "github": None,
         "resume": None,
+        "resume_parsed": None,
+        "resume_file_name": None,
         "matcher": None,
         "baseline": None,
         "assessment_obj": None,
@@ -51,7 +53,10 @@ def init_state():
         "verified_match": None,
         "bias_result": None,
         "report": None,
-        "candidate_code": "",
+        "skills_to_test": [],
+        "skill_index": 0,
+        "mcq_only": False,
+        "github_username": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -64,7 +69,7 @@ st.title("🎯 ScoutAI — Talent Intelligence")
 st.caption("Verify capability. Don't trust the resume.")
 st.divider()
 
-# ── sidebar inputs ─────────────────────────────────────────
+# ── sidebar ────────────────────────────────────────────────
 with st.sidebar:
     st.header("📋 Recruiter Inputs")
 
@@ -74,83 +79,133 @@ with st.sidebar:
         placeholder="We are hiring a Backend Engineer..."
     )
 
-    github_username = st.text_input(
-        "Candidate GitHub Username",
-        placeholder="e.g. torvalds"
-    )
-
     resume_file = st.file_uploader(
         "Upload Resume PDF",
         type=["pdf"]
     )
 
-    analyze_btn = st.button(
-        "🔍 Analyze Candidate",
-        type="primary",
-        use_container_width=True
-    )
+    github_username = None
 
-    st.divider()
-    st.caption("ScoutAI · Techkriti '26 × Eightfold AI")
-
-# ── analyze button clicked ─────────────────────────────────
-if analyze_btn:
-    if not jd_text or not github_username:
-        st.error("Please provide a job description and GitHub username.")
-    else:
-        # reset state for fresh analysis
-        for k in ["stage", "jd", "github", "resume", "matcher",
-                  "baseline", "assessment_obj", "current_question",
-                  "assessment_results", "verified_match",
-                  "bias_result", "report"]:
-            st.session_state[k] = None
-        st.session_state["assessment_results"] = []
-        st.session_state["stage"] = "evidence"
-
-        # ── parse JD ──────────────────────────────────────
-        with st.spinner("Parsing job description..."):
-            st.session_state["jd"] = parse_jd(jd_text, llm_fn=llm_fn)
-
-        # ── extract GitHub signals ─────────────────────────
-        with st.spinner(f"Fetching GitHub signals for {github_username}..."):
-            st.session_state["github"] = extract_github_signals(
-                github_username,
-                token=os.environ.get("GITHUB_TOKEN")
-            )
-
-        # ── parse resume ───────────────────────────────────
-        if resume_file:
-            with st.spinner("Parsing resume..."):
+    if resume_file:
+        if (st.session_state.get("resume_file_name")
+                != resume_file.name):
+            with st.spinner("Reading resume..."):
                 with tempfile.NamedTemporaryFile(
                     delete=False, suffix=".pdf"
                 ) as tmp:
                     tmp.write(resume_file.read())
                     tmp_path = tmp.name
-                st.session_state["resume"] = parse_resume(
+                resume_obj = parse_resume(
                     tmp_path, llm_fn=llm_fn
                 )
                 os.remove(tmp_path)
+                st.session_state["resume_parsed"] = resume_obj
+                st.session_state["resume_file_name"] = (
+                    resume_file.name
+                )
 
-        # ── baseline scoring ───────────────────────────────
-        with st.spinner("Scoring candidate against JD..."):
-            matcher = Matcher()
-            st.session_state["matcher"] = matcher
-            candidate_skills = (
-                st.session_state["github"].inferred_skills
-            )
-            if (st.session_state["resume"] and
-                    st.session_state["resume"].skills):
-                candidate_skills = list(set(
-                    candidate_skills +
-                    st.session_state["resume"].skills
-                ))
-            st.session_state["baseline"] = matcher.match(
-                candidate_skills,
-                st.session_state["jd"].required,
-                st.session_state["jd"].weights
-            )
+        resume_obj = st.session_state.get("resume_parsed")
 
-        st.rerun()
+        if resume_obj:
+            extracted = extract_github_username(
+                resume_obj.raw_text
+            )
+            if extracted:
+                st.success(
+                    f"✅ GitHub found in resume: **{extracted}**"
+                )
+                github_username = extracted
+                st.session_state["github_username"] = extracted
+            else:
+                st.warning("GitHub not found in resume.")
+                github_username = st.text_input(
+                    "Enter GitHub Username manually",
+                    placeholder="e.g. torvalds"
+                )
+                st.session_state["github_username"] = (
+                    github_username
+                )
+    else:
+        st.session_state.pop("resume_parsed", None)
+        st.session_state.pop("resume_file_name", None)
+        github_username = st.text_input(
+            "Candidate GitHub Username",
+            placeholder="e.g. torvalds"
+        )
+        st.session_state["github_username"] = github_username
+
+    st.divider()
+    mcq_only = st.toggle(
+        "MCQ only mode",
+        value=False,
+        help=(
+            "ON = all skills tested with MCQs. "
+            "OFF = Python gets coding questions, "
+            "everything else gets MCQs."
+        )
+    )
+    st.session_state["mcq_only"] = mcq_only
+
+    analyze_btn = st.button(
+        "🔍 Analyze Candidate",
+        type="primary",
+        use_container_width=True,
+        disabled=not (jd_text and github_username)
+    )
+
+    st.divider()
+    st.caption("ScoutAI · Techkriti '26 × Eightfold AI")
+
+# ── analyze clicked ────────────────────────────────────────
+if analyze_btn:
+    for k in ["stage", "jd", "github", "matcher",
+              "baseline", "assessment_obj", "current_question",
+              "assessment_results", "verified_match",
+              "bias_result", "report"]:
+        st.session_state[k] = None
+    st.session_state["assessment_results"] = []
+    st.session_state["stage"] = "evidence"
+
+    # parse JD
+    with st.spinner("Parsing job description..."):
+        st.session_state["jd"] = parse_jd(
+            jd_text, llm_fn=llm_fn
+        )
+
+    # extract GitHub signals
+    with st.spinner(
+        f"Fetching GitHub signals for {github_username}..."
+    ):
+        st.session_state["github"] = extract_github_signals(
+            github_username,
+            token=os.environ.get("GITHUB_TOKEN")
+        )
+
+    # resume already parsed on upload
+    st.session_state["resume"] = st.session_state.get(
+        "resume_parsed"
+    )
+
+    # baseline scoring
+    with st.spinner("Scoring candidate against JD..."):
+        matcher = Matcher()
+        st.session_state["matcher"] = matcher
+        candidate_skills = (
+            st.session_state["github"].inferred_skills
+        )
+        if (st.session_state["resume"] and
+                st.session_state["resume"].skills):
+            candidate_skills = list(set(
+                candidate_skills +
+                st.session_state["resume"].skills
+            ))
+        st.session_state["baseline"] = matcher.match(
+            candidate_skills,
+            st.session_state["jd"].required,
+            st.session_state["jd"].weights
+        )
+
+    st.rerun()
 
 # ── SECTION 1 — Evidence ───────────────────────────────────
 if st.session_state["stage"] in [
@@ -164,17 +219,21 @@ if st.session_state["stage"] in [
         gh = st.session_state["github"]
         if gh:
             st.metric("Active Repos", gh.active_repos)
-            st.metric("Code Quality", f"{gh.code_quality.score}/5")
+            st.metric("Code Quality",
+                      f"{gh.code_quality.score}/5")
             st.metric("Commit Quality",
                       f"{int(gh.commit_quality * 100)}%")
             st.markdown("**Languages:**")
             for lang, pct in gh.languages.items():
-                st.progress(pct, text=f"{lang} {int(pct*100)}%")
+                st.progress(
+                    pct,
+                    text=f"{lang} {int(pct*100)}%"
+                )
 
     with col2:
         st.markdown("**Resume Claims**")
         resume = st.session_state["resume"]
-        if resume:
+        if resume and resume.experience:
             for skill, level in resume.experience.items():
                 st.markdown(f"- **{skill}**: {level}")
         else:
@@ -192,8 +251,10 @@ if st.session_state["stage"] in [
         with col1:
             st.metric("Match Score", f"{baseline.score}%")
         with col2:
-            st.metric("Skills Matched",
-                      f"{len(baseline.matched)}/{len(jd.required)}")
+            st.metric(
+                "Skills Matched",
+                f"{len(baseline.matched)}/{len(jd.required)}"
+            )
         with col3:
             st.metric("Missing Skills", len(baseline.missing))
 
@@ -211,8 +272,15 @@ if st.session_state["stage"] in [
 
     # ── start assessment button ────────────────────────────
     if st.session_state["stage"] == "evidence":
-        if st.button("▶️ Start Live Assessment",
-                     type="primary"):
+        mode_label = (
+            "MCQ Only" if st.session_state.get("mcq_only")
+            else "Smart (Python=Coding, Rest=MCQ)"
+        )
+        st.info(f"Assessment mode: **{mode_label}**")
+
+        if st.button(
+            "▶️ Start Live Assessment", type="primary"
+        ):
             skills = pick_skills_to_verify(
                 jd.required, jd.weights, top_n=2
             )
@@ -221,7 +289,10 @@ if st.session_state["stage"] in [
                     skill=skills[0],
                     start_difficulty=3,
                     max_questions=3,
-                    mode="local"
+                    mode="local",
+                    mcq_only=st.session_state.get(
+                        "mcq_only", False
+                    )
                 )
                 st.session_state["assessment_obj"] = a
                 st.session_state["skills_to_test"] = skills
@@ -248,67 +319,156 @@ if st.session_state["stage"] == "assess":
         skill = q["skill"]
         difficulty = q["difficulty"]
         q_num = len(a.history) + 1
+        q_type = q["type"].upper()
 
         st.markdown(
             f"**Testing: {skill} · "
             f"Question {q_num} · "
-            f"Difficulty L{difficulty}/5**"
+            f"Difficulty L{difficulty}/5 · "
+            f"{q_type}**"
         )
         st.info(q["prompt"])
 
-        code = st.text_area(
-            "Your solution:",
-            value=q["starter_code"],
-            height=180,
-            key=f"code_{q_num}"
-        )
+        if q["type"] == "mcq":
+            options = q["options"]
+            choice = st.radio(
+                "Select your answer:",
+                options=[
+                    f"{k}: {v}"
+                    for k, v in options.items()
+                ],
+                key=f"mcq_{q_num}"
+            )
+            answer = choice[0] if choice else "A"
 
-        if st.button("✅ Submit Answer", type="primary"):
-            with st.spinner("Grading..."):
-                passed = a.submit(q, code)
-
-            if passed:
-                st.success(
-                    f"✅ Passed! Next difficulty: L{a.difficulty}"
-                )
-            else:
-                st.error(
-                    f"❌ Failed. Next difficulty: L{a.difficulty}"
-                )
-
-            next_q = a.next_question()
-
-            if next_q is None:
-                # current skill done
-                result = a.finalize()
-                st.session_state["assessment_results"].append(result)
-
-                # check if more skills to test
-                skill_index = st.session_state.get(
-                    "skill_index", 0) + 1
-                skills = st.session_state.get("skills_to_test", [])
-
-                if skill_index < len(skills):
-                    # start next skill
-                    st.session_state["skill_index"] = skill_index
-                    new_a = AdaptiveAssessment(
-                        skill=skills[skill_index],
-                        start_difficulty=3,
-                        max_questions=3,
-                        mode="local"
+            if st.button("✅ Submit Answer", type="primary"):
+                passed = a.submit(q, answer)
+                if passed:
+                    st.success(
+                        f"✅ Correct! {q['explanation']}"
                     )
-                    st.session_state["assessment_obj"] = new_a
-                    next_q = new_a.next_question()
-                    st.session_state["current_question"] = next_q
                 else:
-                    # all skills done — generate report
-                    st.session_state["stage"] = "report"
-                    st.session_state["current_question"] = None
+                    correct_text = options[q["correct"]]
+                    st.error(
+                        f"❌ Wrong. Correct: "
+                        f"{q['correct']}: {correct_text}. "
+                        f"{q['explanation']}"
+                    )
 
-            else:
-                st.session_state["current_question"] = next_q
+                next_q = a.next_question()
 
-            st.rerun()
+                if next_q is None:
+                    result = a.finalize()
+                    st.session_state[
+                        "assessment_results"
+                    ].append(result)
+
+                    skill_index = (
+                        st.session_state.get("skill_index", 0)
+                        + 1
+                    )
+                    skills = st.session_state.get(
+                        "skills_to_test", []
+                    )
+
+                    if skill_index < len(skills):
+                        st.session_state["skill_index"] = (
+                            skill_index
+                        )
+                        new_a = AdaptiveAssessment(
+                            skill=skills[skill_index],
+                            start_difficulty=3,
+                            max_questions=3,
+                            mode="local",
+                            mcq_only=st.session_state.get(
+                                "mcq_only", False
+                            )
+                        )
+                        st.session_state["assessment_obj"] = (
+                            new_a
+                        )
+                        next_q = new_a.next_question()
+                        st.session_state[
+                            "current_question"
+                        ] = next_q
+                    else:
+                        st.session_state["stage"] = "report"
+                        st.session_state[
+                            "current_question"
+                        ] = None
+                else:
+                    st.session_state["current_question"] = next_q
+
+                st.rerun()
+
+        else:
+            code = st.text_area(
+                "Your solution:",
+                value=q["starter_code"],
+                height=180,
+                key=f"code_{q_num}"
+            )
+
+            if st.button("✅ Submit Answer", type="primary"):
+                with st.spinner("Grading..."):
+                    passed = a.submit(q, code)
+
+                if passed:
+                    st.success(
+                        f"✅ Passed! "
+                        f"Next difficulty: L{a.difficulty}"
+                    )
+                else:
+                    st.error(
+                        f"❌ Failed. "
+                        f"Next difficulty: L{a.difficulty}"
+                    )
+
+                next_q = a.next_question()
+
+                if next_q is None:
+                    result = a.finalize()
+                    st.session_state[
+                        "assessment_results"
+                    ].append(result)
+
+                    skill_index = (
+                        st.session_state.get("skill_index", 0)
+                        + 1
+                    )
+                    skills = st.session_state.get(
+                        "skills_to_test", []
+                    )
+
+                    if skill_index < len(skills):
+                        st.session_state["skill_index"] = (
+                            skill_index
+                        )
+                        new_a = AdaptiveAssessment(
+                            skill=skills[skill_index],
+                            start_difficulty=3,
+                            max_questions=3,
+                            mode="local",
+                            mcq_only=st.session_state.get(
+                                "mcq_only", False
+                            )
+                        )
+                        st.session_state["assessment_obj"] = (
+                            new_a
+                        )
+                        next_q = new_a.next_question()
+                        st.session_state[
+                            "current_question"
+                        ] = next_q
+                    else:
+                        st.session_state["stage"] = "report"
+                        st.session_state[
+                            "current_question"
+                        ] = None
+                else:
+                    st.session_state["current_question"] = next_q
+
+                st.rerun()
 
 # ── SECTION 4 — Final Report ───────────────────────────────
 if st.session_state["stage"] == "report":
@@ -319,8 +479,8 @@ if st.session_state["stage"] == "report":
     gh = st.session_state["github"]
     assessment_results = st.session_state["assessment_results"]
     primary = assessment_results[0] if assessment_results else None
+    github_username = st.session_state.get("github_username", "")
 
-    # get candidate skills
     candidate_skills = gh.inferred_skills if gh else []
     if (st.session_state["resume"] and
             st.session_state["resume"].skills):
@@ -329,7 +489,6 @@ if st.session_state["stage"] == "report":
             st.session_state["resume"].skills
         ))
 
-    # verified match
     with st.spinner("Generating final report..."):
         verified = matcher.match(
             candidate_skills,
@@ -338,18 +497,14 @@ if st.session_state["stage"] == "report":
             assessment=primary
         )
 
-        # bias check
         profile = {
             "name": github_username,
             "skills": candidate_skills
         }
-        if st.session_state["resume"]:
-            profile["university"] = "unknown"
         bias_result = bias_check(
             profile, jd.required, jd.weights, matcher
         )
 
-        # evidence panel
         evidence = {
             "languages": gh.languages if gh else {},
             "code_quality_score": (
@@ -361,7 +516,6 @@ if st.session_state["stage"] == "report":
             ]
         }
 
-        # build report
         report = build_report(
             match=verified,
             evidence=evidence,
@@ -371,28 +525,40 @@ if st.session_state["stage"] == "report":
         )
         st.session_state["report"] = report
 
-    # ── display report ─────────────────────────────────────
+    # ── metrics row ────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Final Score", f"{report.score}%",
-                  delta=f"{report.score - st.session_state['baseline'].score}% vs baseline")
+        baseline_score = (
+            st.session_state["baseline"].score
+            if st.session_state["baseline"] else 0
+        )
+        st.metric(
+            "Final Score",
+            f"{report.score}%",
+            delta=f"{report.score - baseline_score}% vs baseline"
+        )
     with col2:
         fair = report.bias_check.get("fair", False)
-        st.metric("Bias Check",
-                  "✅ Fair" if fair else "❌ Biased",
-                  delta=f"Δ={report.bias_check.get('delta', 0)}")
+        st.metric(
+            "Bias Check",
+            "✅ Fair" if fair else "❌ Biased",
+            delta=f"Δ={report.bias_check.get('delta', 0)}"
+        )
     with col3:
         if primary:
             st.metric(
                 f"{primary.skill} Verified",
                 primary.verified_band.title(),
-                delta="✅ Confirmed" if verified.claim_supported
-                else "⚠️ Contradicted"
+                delta=(
+                    "✅ Confirmed"
+                    if verified.claim_supported
+                    else "⚠️ Contradicted"
+                )
             )
 
     st.divider()
 
-    # assessment results
+    # ── assessment results ─────────────────────────────────
     if assessment_results:
         st.markdown("**🎯 Assessment Results**")
         for r in assessment_results:
@@ -402,11 +568,13 @@ if st.session_state["stage"] == "report":
             with col2:
                 st.markdown(f"Band: `{r.verified_band}`")
             with col3:
-                st.markdown(f"Confidence: {int(r.confidence*100)}%")
+                st.markdown(
+                    f"Confidence: {int(r.confidence*100)}%"
+                )
 
     st.divider()
 
-    # claim contradiction check
+    # ── claim verification ─────────────────────────────────
     if st.session_state["resume"] and primary:
         st.markdown("**🔍 Claim Verification**")
         resume = st.session_state["resume"]
@@ -428,22 +596,28 @@ if st.session_state["stage"] == "report":
 
     st.divider()
 
-    # reasoning chain
+    # ── reasoning chain ────────────────────────────────────
     st.markdown("**💡 Reasoning Chain**")
     st.info(report.reasoning)
 
-    # bias check detail
+    # ── bias audit ─────────────────────────────────────────
     st.markdown("**⚖️ Bias Audit**")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("With Demographics",
-                  report.bias_check.get("with_demographics", 0))
+        st.metric(
+            "With Demographics",
+            report.bias_check.get("with_demographics", 0)
+        )
     with col2:
-        st.metric("Without Demographics",
-                  report.bias_check.get("without", 0))
+        st.metric(
+            "Without Demographics",
+            report.bias_check.get("without", 0)
+        )
     with col3:
-        st.metric("Delta",
-                  report.bias_check.get("delta", 0))
+        st.metric(
+            "Delta",
+            report.bias_check.get("delta", 0)
+        )
 
     if report.bias_check.get("fair"):
         st.success(
@@ -458,11 +632,11 @@ if st.session_state["stage"] == "report":
 
     st.divider()
 
-    # full evidence
+    # ── full evidence ──────────────────────────────────────
     with st.expander("📂 Full Evidence Panel"):
         st.json(evidence)
 
-    # restart button
+    # ── restart ────────────────────────────────────────────
     if st.button("🔄 Analyze Another Candidate"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
