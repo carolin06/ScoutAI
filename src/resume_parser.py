@@ -23,7 +23,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return text.strip()
     except Exception as e:
         return f"Error reading PDF: {e}"
-    
+
+
 def _extract_with_llm(text: str, llm_fn) -> dict:
     """
     Sends resume text to LLM and extracts structured claims.
@@ -82,7 +83,6 @@ def _extract_with_vocab(text: str) -> dict:
     for skill in SKILL_VOCAB:
         if skill.lower() in low:
             skills.append(skill)
-            # find experience level near skill mention
             idx = low.find(skill.lower())
             context = low[max(0, idx-50):idx+50]
             for word in EXPERIENCE_WORDS:
@@ -94,12 +94,35 @@ def _extract_with_vocab(text: str) -> dict:
 
     return {"skills": skills, "experience": experience}
 
+
+def extract_github_username(raw_text: str) -> str | None:
+    """
+    Extracts GitHub username from resume text.
+    Looks for github.com/username patterns.
+    Returns None if not found.
+    """
+    patterns = [
+        r"github\.com/([a-zA-Z0-9_-]+)",
+        r"github:\s*([a-zA-Z0-9_-]+)",
+        r"github\.com\\([a-zA-Z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw_text, re.IGNORECASE)
+        if match:
+            username = match.group(1)
+            if username.lower() not in [
+                "features", "pricing", "login",
+                "signup", "about", "contact", "join"
+            ]:
+                return username
+    return None
+
+
 def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
     """
     Main entry point. Takes a PDF path and returns ResumeClaims.
     Uses LLM if available, falls back to vocab matching.
     """
-    # extract raw text from PDF
     raw_text = extract_text_from_pdf(pdf_path)
 
     if raw_text.startswith("Error"):
@@ -109,7 +132,6 @@ def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
             raw_text=raw_text
         )
 
-    # extract structured claims
     if llm_fn is not None:
         try:
             extracted = _extract_with_llm(raw_text, llm_fn)
@@ -126,7 +148,6 @@ def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
 
 
 if __name__ == "__main__":
-    import sys
     import json
     from src.contracts import asdict
     from groq import Groq
@@ -141,20 +162,25 @@ if __name__ == "__main__":
         )
         return response.choices[0].message.content
 
-    # test with a PDF path passed as argument
-    # python src/resume_parser.py path/to/resume.pdf
     if len(sys.argv) > 1:
         pdf_path = sys.argv[1]
         result = parse_resume(pdf_path, llm_fn=llm_fn)
         print(json.dumps(asdict(result), indent=2))
+
+        # test GitHub extraction
+        username = extract_github_username(result.raw_text)
+        print(f"\nExtracted GitHub username: {username}")
     else:
-        # test with fake text if no PDF provided
         print("No PDF provided. Testing with sample text...")
         sample = """
         John Doe — Software Engineer
+        GitHub: github.com/johndoe
         Skills: Expert Python, 3 years Django, familiar with Docker
         Experience with PostgreSQL and REST APIs.
         Machine Learning enthusiast. Basic knowledge of AWS.
         """
         extracted = _extract_with_llm(sample, llm_fn)
         print(json.dumps(extracted, indent=2))
+
+        username = extract_github_username(sample)
+        print(f"\nExtracted GitHub username: {username}")
