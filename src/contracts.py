@@ -9,6 +9,11 @@ class CodeQuality:
     avg_complexity: str = "unknown"
     score: float = 0.0
 
+@dataclass
+class ResumeClaims:
+    skills: list = field(default_factory=list)
+    experience: dict = field(default_factory=dict)
+    raw_text: str = ""
 
 @dataclass
 class GitHubSignals:
@@ -55,6 +60,6 @@ class FinalReport:
 
 
 __all__ = [
-    "CodeQuality", "GitHubSignals", "JDSkills",
+    "CodeQuality", "ResumeClaims", "GitHubSignals", "JDSkills",
     "AssessmentResult", "MatchResult", "FinalReport", "asdict",
 ]
