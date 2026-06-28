@@ -10,16 +10,11 @@ from src.judge0 import grade
 MIN_LEVEL = 1
 MAX_LEVEL = 5
 
-# Skills we can generate AND execute code for
-# SQL needs a database, so excluded
-# Framework skills (Django, Flask) use Python questions
 TESTABLE_SKILLS = {
     "Python", "JavaScript", "Java", "C++",
     "C#", "Ruby", "Go", "Rust", "TypeScript"
 }
 
-# Framework -> language mapping
-# Django/Flask questions run as Python
 FRAMEWORK_MAP = {
     "Django": "Python",
     "Flask": "Python",
@@ -34,38 +29,25 @@ FRAMEWORK_MAP = {
 
 def pick_skills_to_verify(required: list, weights: dict,
                           top_n: int = 3) -> list:
-    """
-    Picks top N skills to verify.
-    Only includes skills we can actually test with code execution.
-    Framework skills (Django, React) map to their base language.
-    SQL/NoSQL databases excluded — need a real DB to test.
-    """
     sorted_skills = sorted(
         required,
         key=lambda s: weights.get(s, 0.5),
         reverse=True
     )
-
     testable = []
     seen_languages = set()
-
     for skill in sorted_skills:
-        # direct testable skill
         if skill in TESTABLE_SKILLS:
             if skill not in seen_languages:
                 testable.append(skill)
                 seen_languages.add(skill)
-
-        # framework -> map to base language
         elif skill in FRAMEWORK_MAP:
             lang = FRAMEWORK_MAP[skill]
             if lang not in seen_languages:
                 testable.append(skill)
                 seen_languages.add(lang)
-
         if len(testable) >= top_n:
             break
-
     return testable
 
 
@@ -73,13 +55,12 @@ class AdaptiveAssessment:
     def __init__(self, skill: str = "Python",
                  start_difficulty: int = 3,
                  max_questions: int = 5,
-                 use_judge0: bool = False):
+                 mode: str = "local"):
         self.skill = skill
-        # resolve framework to base language for question generation
         self.question_skill = FRAMEWORK_MAP.get(skill, skill)
         self.difficulty = start_difficulty
         self.max_questions = max_questions
-        self.use_judge0 = use_judge0
+        self.mode = mode
         self.asked = set()
         self.history = []
         self.questions = []
@@ -88,7 +69,7 @@ class AdaptiveAssessment:
         if len(self.history) >= self.max_questions:
             return None
         question = get_question(
-            skill=self.question_skill,  # use base language
+            skill=self.question_skill,
             difficulty=self.difficulty,
             asked=self.asked
         )
@@ -103,7 +84,7 @@ class AdaptiveAssessment:
         result = grade(
             candidate_code,
             question,
-            use_judge0=self.use_judge0
+            mode=self.mode
         )
         passed = result["passed"]
         self.history.append({
@@ -151,17 +132,11 @@ class AdaptiveAssessment:
 def run_multi_skill_assessment(required: list, weights: dict,
                                max_skills: int = 3,
                                questions_per_skill: int = 2,
-                               use_judge0: bool = False) -> list:
-    """
-    Runs short adaptive assessment on top N testable skills.
-    Returns list of AssessmentResults, one per skill.
-    """
+                               mode: str = "local") -> list:
     skills_to_test = pick_skills_to_verify(
         required, weights, max_skills
     )
-
     print(f"Skills selected for assessment: {skills_to_test}")
-
     results = []
     for skill in skills_to_test:
         print(f"\n--- Testing: {skill} ---")
@@ -169,7 +144,7 @@ def run_multi_skill_assessment(required: list, weights: dict,
             skill=skill,
             start_difficulty=3,
             max_questions=questions_per_skill,
-            use_judge0=use_judge0
+            mode=mode
         )
         while (q := a.next_question()) is not None:
             if q["difficulty"] <= 3:
@@ -184,7 +159,6 @@ def run_multi_skill_assessment(required: list, weights: dict,
         results.append(result)
         print(f"  band: {result.verified_band} "
               f"(confidence {result.confidence})")
-
     return results
 
 
@@ -196,7 +170,8 @@ if __name__ == "__main__":
     a = AdaptiveAssessment(
         skill="Python",
         start_difficulty=3,
-        max_questions=3
+        max_questions=3,
+        mode="local"
     )
     while (q := a.next_question()) is not None:
         print(f"Question: {q['prompt']}")
