@@ -156,20 +156,12 @@ FULL RESUME TEXT:
 
 
 def extract_github_username(raw_text: str) -> str | None:
-    """
-    Extracts GitHub username from resume text.
-    LaTeX resumes render icons as broken glyphs (§, ï, etc) with no
-    'github' text nearby, so we match the icon-glyph + username pattern
-    directly, in addition to standard github.com/ patterns.
-    """
     patterns = [
         r"github\.com/([a-zA-Z0-9_-]+)",
         r"github:\s*([a-zA-Z0-9_-]+)",
         r"github\.com\\([a-zA-Z0-9_-]+)",
-        r"github\s+([a-zA-Z0-9_-]+)",
-        # broken icon glyph directly followed by username
-        # (common in LaTeX resumes: § JasonPinto24)
-        r"§\s*([A-Za-z][a-zA-Z0-9_-]{2,30})",
+        r"github\s+([a-zA-Z0-9_-]+)",      # ← new: "github carolin06"
+        r"[\uf09b\uf113]\s*([a-zA-Z0-9_-]+)",  # ← new: GitHub icon character
     ]
     for pattern in patterns:
         match = re.search(pattern, raw_text, re.IGNORECASE)
@@ -180,15 +172,6 @@ def extract_github_username(raw_text: str) -> str | None:
                 "signup", "about", "contact", "join"
             ]:
                 return username
-
-    candidates = re.findall(
-        r"\b([A-Z][a-zA-Z]+[0-9]{1,3})\b",
-        raw_text[:800]
-    )
-    if candidates:
-        return candidates[0]
-
-    return None
 
 def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
     """
