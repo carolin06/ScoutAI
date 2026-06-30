@@ -32,7 +32,7 @@ def llm_fn(prompt: str) -> str:
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=1024,
+        max_tokens=2048,
     )
     return response.choices[0].message.content
 
@@ -84,8 +84,6 @@ with st.sidebar:
         type=["pdf"]
     )
 
-    github_username = None
-
     if resume_file:
         if (st.session_state.get("resume_file_name")
                 != resume_file.name):
@@ -103,36 +101,43 @@ with st.sidebar:
                 st.session_state["resume_file_name"] = (
                     resume_file.name
                 )
+                # try auto-extracting GitHub username right away
+                extracted = extract_github_username(
+                    resume_obj.raw_text
+                )
+                if extracted:
+                    st.session_state["github_username"] = extracted
 
         resume_obj = st.session_state.get("resume_parsed")
 
         if resume_obj:
-            extracted = extract_github_username(
-                resume_obj.raw_text
+            current_username = st.session_state.get(
+                "github_username"
             )
-            if extracted:
+            if current_username:
                 st.success(
-                    f"✅ GitHub found in resume: **{extracted}**"
+                    f"✅ GitHub found in resume: "
+                    f"**{current_username}**"
                 )
-                github_username = extracted
-                st.session_state["github_username"] = extracted
             else:
                 st.warning("GitHub not found in resume.")
-                github_username = st.text_input(
+                manual = st.text_input(
                     "Enter GitHub Username manually",
-                    placeholder="e.g. torvalds"
+                    placeholder="e.g. torvalds",
+                    key="manual_github_input"
                 )
-                st.session_state["github_username"] = (
-                    github_username
-                )
+                if manual:
+                    st.session_state["github_username"] = manual
     else:
         st.session_state.pop("resume_parsed", None)
         st.session_state.pop("resume_file_name", None)
-        github_username = st.text_input(
+        manual = st.text_input(
             "Candidate GitHub Username",
-            placeholder="e.g. torvalds"
+            placeholder="e.g. torvalds",
+            value=st.session_state.get("github_username") or "",
+            key="manual_github_input_no_resume"
         )
-        st.session_state["github_username"] = github_username
+        st.session_state["github_username"] = manual
 
     st.divider()
     mcq_only = st.toggle(
@@ -150,7 +155,9 @@ with st.sidebar:
         "🔍 Analyze Candidate",
         type="primary",
         use_container_width=True,
-        disabled=not (jd_text and github_username)
+        disabled=not (
+            jd_text and st.session_state.get("github_username")
+        )
     )
 
     st.divider()
@@ -158,6 +165,8 @@ with st.sidebar:
 
 # ── analyze clicked ────────────────────────────────────────
 if analyze_btn:
+    github_username = st.session_state.get("github_username")
+
     for k in ["stage", "jd", "github", "matcher",
               "baseline", "assessment_obj", "current_question",
               "assessment_results", "verified_match",
@@ -165,6 +174,7 @@ if analyze_btn:
         st.session_state[k] = None
     st.session_state["assessment_results"] = []
     st.session_state["stage"] = "evidence"
+    st.session_state["github_username"] = github_username
 
     # parse JD
     with st.spinner("Parsing job description..."):
@@ -180,6 +190,12 @@ if analyze_btn:
             github_username,
             token=os.environ.get("GITHUB_TOKEN")
         )
+    st.write(f"DEBUG username used: '{github_username}'")
+    st.write(f"DEBUG note: '{st.session_state['github'].note}'")
+    st.write(
+        f"DEBUG token present: "
+        f"{bool(os.environ.get('GITHUB_TOKEN'))}"
+    )
 
     # resume already parsed on upload
     st.session_state["resume"] = st.session_state.get(
@@ -202,7 +218,8 @@ if analyze_btn:
         st.session_state["baseline"] = matcher.match(
             candidate_skills,
             st.session_state["jd"].required,
-            st.session_state["jd"].weights
+            st.session_state["jd"].weights,
+            llm_fn=llm_fn
         )
 
     st.rerun()
@@ -234,12 +251,38 @@ if st.session_state["stage"] in [
         st.markdown("**Resume Claims**")
         resume = st.session_state["resume"]
         if resume and resume.experience:
-            for skill, level in resume.experience.items():
-                st.markdown(f"- **{skill}**: {level}")
+            with st.expander(
+                f"All {len(resume.skills)} skills detected",
+                expanded=True
+            ):
+                for skill, level in resume.experience.items():
+                    st.markdown(f"- **{skill}**: {level}")
         else:
             st.info("No resume uploaded")
 
     st.divider()
+
+    # ── Project Feedback ────────────────────────────────────
+    resume = st.session_state["resume"]
+    if resume and getattr(resume, "projects", None):
+        st.subheader("🛠️ Project Analysis")
+        for proj in resume.projects:
+            with st.expander(
+                f"📁 {proj.get('title', 'Untitled Project')}"
+            ):
+                st.markdown(
+                    f"**Summary:** {proj.get('summary', '')}"
+                )
+                tech = proj.get("tech_stack", [])
+                if tech:
+                    st.markdown(
+                        "**Tech Stack:** " + ", ".join(tech)
+                    )
+                st.markdown(
+                    f"**Honest Assessment:** "
+                    f"{proj.get('feedback', '')}"
+                )
+        st.divider()
 
     # ── SECTION 2 — Baseline match ─────────────────────────
     st.subheader("🎯 Baseline Match")
@@ -494,7 +537,8 @@ if st.session_state["stage"] == "report":
             candidate_skills,
             jd.required,
             jd.weights,
-            assessment=primary
+            assessment=primary,
+            llm_fn=llm_fn
         )
 
         profile = {
