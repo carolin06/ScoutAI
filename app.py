@@ -193,7 +193,8 @@ if analyze_btn:
     ):
         st.session_state["github"] = extract_github_signals(
             github_username,
-            token=os.environ.get("GITHUB_TOKEN")
+            token=os.environ.get("GITHUB_TOKEN"),
+            llm_fn=llm_fn
         )
 
     # resume already parsed on upload
