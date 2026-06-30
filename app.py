@@ -188,7 +188,8 @@ if analyze_btn:
     ):
         st.session_state["github"] = extract_github_signals(
             github_username,
-            token=os.environ.get("GITHUB_TOKEN")
+            token=os.environ.get("GITHUB_TOKEN"),
+            llm_fn=llm_fn
         )
     st.write(f"DEBUG username used: '{github_username}'")
     st.write(f"DEBUG note: '{st.session_state['github'].note}'")

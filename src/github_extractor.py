@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import sys
 from collections import Counter
 import sys, os
@@ -38,7 +40,78 @@ def _hygiene_for_repo(names: set) -> dict:
         )
     return found
 
+def _get_sample_code(repo, max_chars: int = 2000) -> str:
+    """
+    Fetches one real source file from the repo root to use
+    for LLM-based code quality review. Returns empty string
+    if nothing suitable is found.
+    """
+    CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".cpp", ".go")
+    try:
+        contents = repo.get_contents("")
+        for f in contents:
+            if f.type == "file" and f.name.endswith(CODE_EXTENSIONS):
+                try:
+                    decoded = f.decoded_content.decode(
+                        "utf-8", errors="ignore"
+                    )
+                    return decoded[:max_chars]
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return ""
 
+
+def llm_review_code(file_content: str, llm_fn) -> dict:
+    """
+    Sends a real code sample to the LLM for quality review.
+    Returns scores 1-5 on readability, naming, error handling,
+    organization, plus a one-sentence summary.
+    """
+    if not file_content or not llm_fn:
+        return {
+            "readability": 0,
+            "naming": 0,
+            "error_handling": 0,
+            "organization": 0,
+            "summary": "No code sample available."
+        }
+
+    prompt = f"""Review this real code sample from a candidate's GitHub repo.
+Rate it honestly on a 1-5 scale for each:
+- readability: clear variable names, consistent formatting
+- naming: meaningful function/variable names
+- error_handling: handles edge cases, uses try/except appropriately
+- organization: logical structure, not one giant function
+
+Return ONLY valid JSON, no explanation:
+{{
+    "readability": 4,
+    "naming": 5,
+    "error_handling": 3,
+    "organization": 4,
+    "summary": "one honest sentence about overall quality"
+}}
+
+CODE:
+{file_content}
+"""
+    try:
+        raw = llm_fn(prompt).strip()
+        raw = re.sub(
+            r"^```(json)?|```$", "", raw, flags=re.MULTILINE
+        ).strip()
+        return json.loads(raw)
+    except Exception:
+        return {
+            "readability": 0,
+            "naming": 0,
+            "error_handling": 0,
+            "organization": 0,
+            "summary": "Could not evaluate code sample."
+        }
+    
 def _commit_quality(repo, limit: int = 30) -> float:
     try:
         msgs = [c.commit.message.split("\n")[0].strip()
@@ -54,7 +127,7 @@ def _commit_quality(repo, limit: int = 30) -> float:
 
 
 def extract_github_signals(username: str, token: str = None,
-                           top_n: int = 5) -> GitHubSignals:
+                           top_n: int = 3, llm_fn=None):
     sig = GitHubSignals(username=username)
     try:
         client = Github(auth=Auth.Token(token)) if token else Github()
@@ -105,14 +178,28 @@ def extract_github_signals(username: str, token: str = None,
 
     tests_present = round(
         hygiene_hits["tests"] / len(top), 2) if top else 0.0
-    combined = (
-        2.0 * tests_present +
-        1.0 * sig.commit_quality +
-        0.5 * (hygiene_hits["ci"] / len(top) if top else 0) +
-        0.5 * (hygiene_hits["readme"] / len(top) if top else 0)
+    # fetch a real code sample from the top repo for LLM review
+    sample_code = _get_sample_code(top[0]) if top else ""
+    llm_review = llm_review_code(sample_code, llm_fn)
+
+    # average the four LLM dimensions into one readability score
+    llm_readability = round(
+        (llm_review["readability"] + llm_review["naming"] +
+        llm_review["error_handling"] + llm_review["organization"]) / 4,
+        1
     )
+
+    combined = (
+        1.5 * tests_present +
+        0.8 * sig.commit_quality +
+        0.4 * (hygiene_hits["ci"] / len(top)) +
+        0.3 * (hygiene_hits["readme"] / len(top)) +
+        2.0 * (llm_readability / 5)  # normalize to 0-1, weight highest
+    )
+
     sig.code_quality = CodeQuality(
         tests_present=tests_present,
+        llm_readability=llm_readability,
         avg_complexity="unknown",
         score=round(max(1.0, min(5.0, combined)), 1),
     )
