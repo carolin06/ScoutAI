@@ -85,8 +85,11 @@ with st.sidebar:
     )
 
     if resume_file:
-        if (st.session_state.get("resume_file_name")
-                != resume_file.name):
+        file_changed = (
+            st.session_state.get("resume_file_name")
+            != resume_file.name
+        )
+        if file_changed:
             with st.spinner("Reading resume..."):
                 with tempfile.NamedTemporaryFile(
                     delete=False, suffix=".pdf"
@@ -101,7 +104,9 @@ with st.sidebar:
                 st.session_state["resume_file_name"] = (
                     resume_file.name
                 )
-                # try auto-extracting GitHub username right away
+                # always reset and re-extract on a genuinely
+                # new file to avoid stale leftover values
+                st.session_state["github_username"] = None
                 extracted = extract_github_username(
                     resume_obj.raw_text
                 )
@@ -190,12 +195,6 @@ if analyze_btn:
             github_username,
             token=os.environ.get("GITHUB_TOKEN")
         )
-    st.write(f"DEBUG username used: '{github_username}'")
-    st.write(f"DEBUG note: '{st.session_state['github'].note}'")
-    st.write(
-        f"DEBUG token present: "
-        f"{bool(os.environ.get('GITHUB_TOKEN'))}"
-    )
 
     # resume already parsed on upload
     st.session_state["resume"] = st.session_state.get(

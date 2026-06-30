@@ -156,22 +156,33 @@ FULL RESUME TEXT:
 
 
 def extract_github_username(raw_text: str) -> str | None:
+    """
+    Extracts GitHub username from resume text.
+    STRICT: only matches genuine GitHub link/icon patterns.
+    No loose 'github <word>' matching — that caused false positives
+    on sentences like 'Built a GitHub signal extractor'.
+    """
     patterns = [
         r"github\.com/([a-zA-Z0-9_-]+)",
-        r"github:\s*([a-zA-Z0-9_-]+)",
         r"github\.com\\([a-zA-Z0-9_-]+)",
-        r"github\s+([a-zA-Z0-9_-]+)",      # ← new: "github carolin06"
-        r"[\uf09b\uf113]\s*([a-zA-Z0-9_-]+)",  # ← new: GitHub icon character
+        # broken icon glyph directly followed by a handle-like token
+        # ending in digits (e.g. '§ JasonPinto24')
+        r"[§ï]\s*([A-Za-z][a-zA-Z]{2,20}[0-9]{1,4})\b",
     ]
+
+    BLOCKLIST = {
+        "features", "pricing", "login", "signup", "about",
+        "contact", "join",
+    }
+
     for pattern in patterns:
         match = re.search(pattern, raw_text, re.IGNORECASE)
         if match:
             username = match.group(1)
-            if username.lower() not in [
-                "features", "pricing", "login",
-                "signup", "about", "contact", "join"
-            ]:
+            if username.lower() not in BLOCKLIST:
                 return username
+
+    return None
 
 def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
     """
