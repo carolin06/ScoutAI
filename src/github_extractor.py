@@ -84,8 +84,8 @@ def extract_github_signals(username: str, token: str = None,
                      for l, b in lang_bytes.most_common(6)}
 
     top = sorted(originals,
-                 key=lambda r: (r.stargazers_count, r.size),
-                 reverse=True)[:top_n]
+             key=lambda r: r.updated_at,
+             reverse=True)[:top_n]
 
     hygiene_hits = Counter()
     topics = set()

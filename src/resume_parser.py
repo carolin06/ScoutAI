@@ -96,15 +96,12 @@ def _extract_with_vocab(text: str) -> dict:
 
 
 def extract_github_username(raw_text: str) -> str | None:
-    """
-    Extracts GitHub username from resume text.
-    Looks for github.com/username patterns.
-    Returns None if not found.
-    """
     patterns = [
         r"github\.com/([a-zA-Z0-9_-]+)",
         r"github:\s*([a-zA-Z0-9_-]+)",
         r"github\.com\\([a-zA-Z0-9_-]+)",
+        r"github\s+([a-zA-Z0-9_-]+)",      # ← new: "github carolin06"
+        r"[\uf09b\uf113]\s*([a-zA-Z0-9_-]+)",  # ← new: GitHub icon character
     ]
     for pattern in patterns:
         match = re.search(pattern, raw_text, re.IGNORECASE)
@@ -116,7 +113,6 @@ def extract_github_username(raw_text: str) -> str | None:
             ]:
                 return username
     return None
-
 
 def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
     """
