@@ -156,23 +156,36 @@ FULL RESUME TEXT:
 
 
 def extract_github_username(raw_text: str) -> str | None:
+    """
+    Extracts GitHub username from resume text.
+    STRICT: only matches when there's clear evidence this is a GitHub
+    link/icon, not just any capitalized word. No loose fallback —
+    a missed username is far better than a wrong one.
+    """
     patterns = [
         r"github\.com/([a-zA-Z0-9_-]+)",
         r"github:\s*([a-zA-Z0-9_-]+)",
         r"github\.com\\([a-zA-Z0-9_-]+)",
-        r"github\s+([a-zA-Z0-9_-]+)",      # ← new: "github carolin06"
-        r"[\uf09b\uf113]\s*([a-zA-Z0-9_-]+)",  # ← new: GitHub icon character
+        # broken icon glyph (common LaTeX resume icons) directly
+        # followed by a username-like token, but require it NOT be
+        # a common word and require digits OR be clearly a handle
+        r"[§ï](?:\s*)([A-Za-z][a-zA-Z]{2,20}[0-9]{1,4})\b",
     ]
+
+    BLOCKLIST = {
+        "features", "pricing", "login", "signup", "about",
+        "contact", "join", "api", "json", "models", "code",
+        "platform", "search", "engine", "mode", "panel",
+    }
+
     for pattern in patterns:
         match = re.search(pattern, raw_text, re.IGNORECASE)
         if match:
             username = match.group(1)
-            if username.lower() not in [
-                "features", "pricing", "login",
-                "signup", "about", "contact", "join"
-            ]:
+            if username.lower() not in BLOCKLIST:
                 return username
 
+    return None
 def parse_resume(pdf_path: str, llm_fn=None) -> ResumeClaims:
     """
     Main entry point. Takes a PDF path and returns ResumeClaims.
