@@ -14,6 +14,7 @@ class ResumeClaims:
     skills: list = field(default_factory=list)
     experience: dict = field(default_factory=dict)
     raw_text: str = ""
+    projects: list = field(default_factory=list)
 
 @dataclass
 class GitHubSignals:
